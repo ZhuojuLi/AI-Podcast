@@ -1,6 +1,13 @@
 # -*- coding: utf-8 -*-
 """契约冒烟测试：复刻评测端 run_for_darvin 的核心校验流程。
 
+延迟口径（三者分开报告，勿混用）：
+  first_byte   首个响应字节 —— 服务端开了 TTS_EARLY_ID3_KIB 时，
+               这是提前发送的 ID3 元数据到达时间，不代表能听到声音
+  first_audio  首段可播放语音到达 —— 跳过前导 ID3 标签后，
+               第一个 MP3 音频帧的到达时间（用户感知口径）
+  elapsed/rtf  整单完成时间与实时率
+
 用法：
     python scripts/smoke_test.py --base-url http://localhost:8086
 """
@@ -13,6 +20,20 @@ import threading
 import time
 
 import requests
+
+
+def first_audio_offset(buf: bytearray):
+    """跳过前导 ID3v2 标签，返回首个 MP3 音频帧偏移；数据不足返回 None。"""
+    offset = 0
+    while len(buf) >= offset + 10 and buf[offset:offset + 3] == b"ID3":
+        size = 0
+        for byte in buf[offset + 6: offset + 10]:   # syncsafe 整数
+            size = (size << 7) | (byte & 0x7F)
+        offset += 10 + size
+    if len(buf) > offset + 1 and buf[offset] == 0xFF \
+            and (buf[offset + 1] & 0xE0) == 0xE0:
+        return offset
+    return None
 
 
 def parse_sse(lines):
@@ -51,6 +72,8 @@ def run_case(base_url, item_id, topic, g1, g2, out_dir):
     def _audio():
         path = os.path.join(out_dir, f"{item_id}_audio.mp3")
         first_chunk = None
+        first_audio = None
+        buf = bytearray()
         start = time.time()
         with requests.post(
             f"{base_url}/generate_audio",
@@ -64,11 +87,17 @@ def run_case(base_url, item_id, topic, g1, g2, out_dir):
             with open(path, "wb") as f:
                 for chunk in resp.iter_content(chunk_size=8192):
                     if chunk:
+                        now = time.time() - start
                         if first_chunk is None:
-                            first_chunk = time.time() - start
+                            first_chunk = now
+                        if first_audio is None:
+                            buf += chunk
+                            if first_audio_offset(buf) is not None:
+                                first_audio = now
                         f.write(chunk)
         results["audio_path"] = path
         results["first_chunk"] = first_chunk or 0.0
+        results["first_audio"] = first_audio if first_audio is not None else -1.0
 
     def _content():
         with requests.post(
@@ -126,7 +155,6 @@ def run_case(base_url, item_id, topic, g1, g2, out_dir):
         problems.append(f"音频时长越界: {duration:.1f}s（需 300-900s）")
     if results.get("first_chunk", 0) > 30:
         problems.append(f"首 chunk 超时: {results['first_chunk']:.2f}s")
-
     # 3) 封面
     cover_path = os.path.join(out_dir, f"{item_id}_cover.png")
     r = requests.get(f"{base_url}/download/image/{item_id}_cover", timeout=120)
@@ -143,9 +171,6 @@ def run_case(base_url, item_id, topic, g1, g2, out_dir):
         except Exception as exc:  # noqa: BLE001
             problems.append(f"封面校验异常: {exc}")
 
-    # 4) RTF
-    if duration > 0:
-        elapsed = results.get("first_chunk", 0) and 0 or 0  # placeholder
     return results, problems, duration
 
 
@@ -179,7 +204,16 @@ def main():
     print(f"turns        : {len(results.get('transcript', {}).get('content', []))}")
     print(f"title        : {results.get('transcript', {}).get('title')}")
     print(f"duration     : {duration:.1f}s")
-    print(f"first_chunk  : {results.get('first_chunk', 0):.2f}s")
+    print(f"first_byte   : {results.get('first_chunk', 0):.2f}s"
+          "  (首个响应字节，含提前发送的 ID3 元数据)")
+    first_audio = results.get("first_audio", -1.0)
+    if first_audio >= 0:
+        print(f"first_audio  : {first_audio:.2f}s"
+              "  (首段可播放语音到达，用户感知口径)")
+        if first_audio > 30:
+            print("WARN: 首段可播放语音超过 30s，用户感知偏慢（不影响评测门禁）")
+    else:
+        print("first_audio  : 未检测到有效 MP3 帧（请检查流内容）")
     print(f"elapsed      : {elapsed:.1f}s   rtf={rtf:.3f}")
 
     if problems:

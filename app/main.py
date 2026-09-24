@@ -151,6 +151,23 @@ def create_app() -> Flask:
             traceback.print_exc()
             return json_response({"success": False, "message": str(exc)}, 500)
 
+    @app.route("/status/<item_id>", methods=["GET"])
+    def session_status(item_id: str):
+        """会话生命周期查询：processing / completed / failed（含失败原因）。"""
+        state = STORE.get(item_id)
+        if state is None:
+            return json_response({"success": False, "message": f"会话不存在: {item_id}"}, 404)
+        payload = {
+            "success": True,
+            "item_id": item_id,
+            "status": state.status,
+            "finished": state.finished,
+            "elapsed": round(time.time() - state.created_at, 2),
+        }
+        if state.error:
+            payload["error"] = state.error
+        return json_response(payload)
+
     @app.route("/download/<file_type>/<file_id>", methods=["GET"])
     def download_file(file_type: str, file_id: str):
         print(f"[文件下载] 请求: {file_type}/{file_id}")

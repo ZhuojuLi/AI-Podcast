@@ -56,6 +56,7 @@ def _run_script(state: ItemState) -> None:
                 "title": state.title or f"AI 播客：{state.topic}", "content": "[]"}))
         queue.put(("done", None))
     except Exception as exc:  # noqa: BLE001
+        state.mark_failed(f"文稿生成失败: {exc}")
         queue.put(("error", str(exc)))
     finally:
         state.set_title(state.title or f"AI 播客：{state.topic}")
@@ -116,15 +117,21 @@ def audio_stream(state: ItemState) -> Iterator[bytes]:
                 yield chunk
         os.replace(temp_path, os.path.join(config.AUDIO_DIR, f"{state.audio_id}.mp3"))
         temp_path = None
+    except GeneratorExit:
+        # 客户端中断（连接关闭）：不算服务故障，但会话不能停在 processing
+        state.mark_failed("客户端中断，生成取消")
+        raise
     except Exception as exc:  # noqa: BLE001
+        state.mark_failed(f"音频生成失败: {exc}")
         state.content_queue.put(("error", f"音频生成失败: {exc}"))
         raise
+    else:
+        state.mark_completed()
     finally:
         if temp_path and os.path.exists(temp_path):
             os.unlink(temp_path)
         if state.cover_thread is not None:
             state.cover_thread.join(timeout=config.TRANSCRIPT_WAIT_TIMEOUT)
-        state.mark_completed()
 
 
 def content_events(state: ItemState) -> Iterator[str]:

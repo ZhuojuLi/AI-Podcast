@@ -36,7 +36,13 @@ class ItemState:
         self.turn_queue: "queue.Queue" = queue.Queue()
         self.title = ""
         self.title_event = threading.Event()
-        self.status = "processing"
+        # 文稿同步字段必须在构造时就绪：wait_transcript/set_transcript
+        # 可能在 iter_segments() 消费完队列之前被调用
+        self._transcript: Optional[Transcript] = None
+        self._transcript_event = threading.Event()
+        self._lock = threading.Lock()
+        self.status = "processing"   # processing / completed / failed
+        self.error = ""
         self.finished = False
         self.created_at = time.time()
         self.cover_thread = None
@@ -55,10 +61,6 @@ class ItemState:
                 break
             yield seg
 
-        self._transcript: Optional[Transcript] = None
-        self._transcript_event = threading.Event()
-        self._lock = threading.Lock()
-
     # ---- 文稿就绪同步 ----
     def set_transcript(self, transcript: Optional[Transcript]) -> None:
         with self._lock:
@@ -72,7 +74,16 @@ class ItemState:
 
     # ---- 生命周期 ----
     def mark_completed(self) -> None:
+        if self.finished:
+            return   # 已失败/已完成的会话不可被覆盖
         self.status = "completed"
+        self.finished = True
+
+    def mark_failed(self, message: str) -> None:
+        if self.finished:
+            return
+        self.status = "failed"
+        self.error = message
         self.finished = True
 
 

@@ -28,6 +28,7 @@ mock 后端用 ffmpeg 生成 7–10 分钟静音 MP3、Pillow 生成 1024×1024 
 | GET | `/ready` | 探活，LLM + TTS 均就绪后返回 `200 True`，此前 503 |
 | POST | `/generate_audio` | `x-www-form-urlencoded` → chunked 原始 MP3 字节流 |
 | POST | `/generate_content` | SSE 文稿流（`content_start`→`content`→`done`） |
+| GET | `/status/<item_id>` | 会话生命周期：`processing` / `completed` / `failed`（含失败原因与耗时） |
 | GET | `/download/<file_type>/<file_id>` | 下载 `image`/`audio` 文件 |
 
 `/generate_audio` 参数：`item_id`（必填）、`topic`、`speaker_gender1`、`speaker_gender2`。
@@ -86,13 +87,28 @@ provider 层可插拔，切换只需实现 `app/providers/base.py` 的抽象接�
 
 参考音不是"随便截一段"就能用的，踩过的坑都在工具链里：
 
-- `scripts/scan_podcast_voices.py`：campplus 说话人嵌入全片扫描（9s 窗 / 1.5s 跳距），
-  按纯度（无换人/叠话）、能量动态、响度打分，输出候选清单
+- `scripts/auto_reference.py`：**全自动冷启动**——输入整集未裁剪播客，
+  滑窗提取 campplus 嵌入 → 球面 k-means 聚类自动发现说话人（无需先验
+  参考音）→ 按纯度/句间底噪/信噪比/能量动态打分挑段 → 修整输出
+  `male.wav`/`female.wav`。原则是**筛选优先于清洗**：句间底噪会被克隆进
+  合成结果，带 BGM/混响的段直接丢弃，候选不足时才用 `--denoise`
+  （DeepFilterNet）事后补救
+- `scripts/scan_podcast_voices.py`：已知目标音色时的精细复扫（9s 窗 /
+  1.5s 跳距），按嵌入相似度、纯度、能量动态、响度打分输出候选清单
 - F0（pyworld）标性别 + 嵌入相似度校验身份
 - `scripts/trim_reference_voice.py`：70Hz 高通去低频隆隆声 → 峰值归一 -3dB →
   首尾 60ms 静音垫 + 20ms 淡入淡出（不修的话克隆出的语音首尾会带杂音/爆音）
 - 双音色设计：评测的性别组合可能是男男/女女，单一音色必丢"区分度"分，
   v1.5 起 speaker2 自动切换第二套音色与配套人设指令
+
+## 架构边界（已知限制）
+
+- **会话生命周期**：`processing / completed / failed` 三态，
+  `GET /status/<item_id>` 可查；合成异常、文稿异常、客户端中断都会落
+  `failed` 并带原因，不会误标 `completed`（有回归测试）
+- **单实例语义**：会话状态在进程内存、队列无界、TTS 推理用全局锁串行。
+  这是单实例服务的实现方式；要水平扩展需外置状态存储与队列、按实例
+  并发控制和监控配套，不在本仓库范围内
 
 ## 显存预算（A100，LLM + TTS 同卡）
 
@@ -107,13 +123,26 @@ provider 层可插拔，切换只需实现 `app/providers/base.py` 的抽象接�
 
 ## 实测（v1.3，14B-AWQ + CosyVoice3，4 核 / 8GiB RAM）
 
-- `/ready=200`，69 轮对话，成品 419.4 秒音频
-- 首个音频块 **10.76 秒**，整单 276.8 秒 / **RTF 0.660**
-- 音频、文稿 SSE、1024² 封面均通过 `scripts/smoke_test.py`
-- 整单结束后容器无 OOM，稳态内存约 5.7GiB / 8GiB
+延迟分三个口径报告，勿混用：
 
-v1.0（27B + CosyVoice3，A100-80G）：55 轮，成品 382.8 秒；首块 13.72 秒，
-整单 290.8 秒 / RTF 0.760；MP3 16kHz 单声道，下载接口与流式内容 SHA-256 一致。
+| 指标 | 含义 | v1.3 | v1.0（27B，A100-80G） |
+|---|---|---|---|
+| 首个响应字节 | HTTP 流第一个非空 chunk 到达 | 10.76s | 13.72s |
+| 首段可播放语音 | 跳过前导 ID3 标签后，首个 MP3 音频帧到达 | = 10.76s | = 13.72s |
+| 整单 / RTF | 全单完成时间 / 实时率 | 276.8s / 0.660 | 290.8s / 0.760 |
+
+- 成品：69 轮对话、419.4 秒音频（v1.0：55 轮、382.8 秒），
+  音频/文稿 SSE/1024² 封面均通过 `scripts/smoke_test.py`
+- 整单结束后容器无 OOM，稳态内存约 5.7GiB / 8GiB
+- v1.0：MP3 16kHz 单声道，下载接口与流式内容 SHA-256 一致
+
+**口径说明**：上表两个版本测量时 `TTS_EARLY_ID3_KIB=0`（未提前发送），
+所以"首个响应字节"就是"首段可播放语音到达"。仓库 Dockerfile 默认
+`TTS_EARLY_ID3_KIB=1024`（评测 30 秒首 chunk 门禁的保底措施，见踩坑速查），
+开启后"首个响应字节"测到的是 1 MiB ID3 元数据、亚秒级即达，
+**不再代表用户何时听到第一句话**。`smoke_test.py` 现在分别输出
+`first_byte` 与 `first_audio`：后者解析 ID3v2 syncsafe 长度跳过元数据、
+定位第一个 MP3 帧同步头（`0xFFEx`），才是用户感知口径。
 
 ## 四个 0 分门限（防御措施）
 
@@ -135,7 +164,9 @@ v1.0（27B + CosyVoice3，A100-80G）：55 轮，成品 382.8 秒；首块 13.72
 - **TTS 预热要真跑一句**：只加载权重的话首个 case 要触发 kernel 调优，
   第一句 35~44s；预热真合成后稳态首字节 16~21s
 - **音频流首 chunk 保底**：流开头立即输出 1 MiB 合法 ID3v2.3 空白元数据
-  （解码器跳过，不影响时长与听感），防止下游读取缓冲把首 chunk 拖过门禁
+  （解码器跳过，不影响时长与听感），防止下游读取缓冲把首 chunk 拖过门禁。
+  代价：此后"首个非空 chunk"不再代表可播放语音到达，测延迟必须用
+  `smoke_test.py` 的 `first_audio` 口径
 - **FireRed 参考音要带干声**：播客片段带房间混响会被连同克隆；合成干声
   prompt 或选无混响片段能消除回响
 
