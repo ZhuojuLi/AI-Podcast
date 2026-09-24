@@ -1,0 +1,7 @@
+# 契约服务（系统 python）
+Flask==3.0.3
+gunicorn==22.0.0
+requests==2.32.3
+PyYAML==6.0.2
+Pillow==10.4.0
+ddgs==9.16.0

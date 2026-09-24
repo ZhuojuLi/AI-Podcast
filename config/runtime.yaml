@@ -1,0 +1,35 @@
+# 运行时阈值与开关
+audio:
+  sample_rate: 16000
+  channels: 1
+  min_duration: 420   # 7 min（评测 300-900s）
+  max_duration: 600   # 10 min
+  target_min: 390     # 文稿预估下限
+  target_max: 600
+
+cover:
+  width: 1024
+  height: 1024
+  format: PNG
+
+script:
+  min_turns: 30
+  max_turns: 60
+  speaker_ratio_min: 0.40   # 单人口语轮次占比下限
+  speaker_ratio_max: 0.60
+  cn_ratio_min: 0.90
+  chars_per_min: 260        # 中文语速估算
+
+asr:
+  cer_pass: 0.03
+  cer_retry: 0.08
+  max_retry_per_turn: 2
+
+text_provider:
+  base_url: "http://127.0.0.1:8100/v1"
+  model: "qwen3-14b-awq"
+  temperature:
+    facts: 0.1
+    outline: 0.4
+    dialogue: 0.65
+    critic: 0.1

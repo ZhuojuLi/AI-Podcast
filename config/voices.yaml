@@ -1,0 +1,43 @@
+# 音色配置：CosyVoice3 + 参考音克隆。
+# 运行时使用 Dockerfile 的 TTS_MALE_REF / TTS_FEMALE_REF / TTS_FEMALE_TEMPO；
+# 此文件只作音色说明，不参与 provider 参数读取。
+# v1.5 起新增第二套音色（male2/female2）：同性别双主播（男男/女女）时
+# speaker2 使用，保证音色区分度；异性时行为与 v1.4 一致。
+#
+# ⚠️ 本仓库不含参考音频（见 resources/voices/README.md）：
+# 请自行准备 4 段你拥有使用权的参考 WAV 放入对应路径。
+gender_voices:
+  男: [male_reference, male2_reference]
+  女: [female_reference, female2_reference]
+
+# 逻辑音色 -> 镜像内参考 WAV
+voices:
+  male_1:
+    gender: 男
+    reference: /app/resources/voices/male.wav
+    tempo: 1.0
+    style: 青年男声，标准普通话，自然交谈
+  male_2:
+    gender: 男
+    reference: /app/resources/voices/male2.wav
+    tempo: 1.0
+    style: 沉稳思辨男声，标准普通话，访谈对谈
+  female_1:
+    gender: 女
+    reference: /app/resources/voices/female.wav
+    tempo: 1.07
+    style: 青年女声，标准普通话；轻微提速但不抬音高
+  female_2:
+    gender: 女
+    reference: /app/resources/voices/female2.wav
+    tempo: 1.07
+    style: 知性从容女声，标准普通话，访谈主持
+
+# persona：固定角色，降低 AI 味
+personas:
+  speaker1:
+    role: Narrative Co-host
+    duty: 擅长推进故事和抓矛盾，也会回答问题、表达判断
+  speaker2:
+    role: Analyst Co-host
+    duty: 擅长拆解商业逻辑，也会主动追问、质疑和推进话题

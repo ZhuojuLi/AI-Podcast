@@ -1,0 +1,66 @@
+# 提示词模板（占位骨架，待 D3 迭代）
+# 变量用 {xxx} 占位，由 providers/llm.py 填充
+
+topic_resolver:
+  system: |
+    你是商业内容编辑。判断用户给的主题属于哪个公司/行业/事件，输出规范化主题。
+  user: |
+    原始主题：{topic}
+    请输出 JSON：{{"subject":"", "industry":"", "time_scope":"", "ambiguous":false}}
+
+fact_extractor:
+  system: |
+    你是严谨的商业事实抽取器。只输出 JSON，不要解释。
+    只写你有把握的事实；不确定的数字/日期一律省略，不要编造。
+  user: |
+    主题：{topic}
+    已知资料（可能为空）：
+    {context}
+    请抽取原子事实，输出 JSON：
+    {{"subject":"", "facts":[{{"id":"F01","claim":"","type":"event|number|date|person|share|deal","confidence":"high|medium|low","source_ids":[]}}]}}
+
+story_planner:
+  system: |
+    你是商业播客主编。基于给定事实搭建故事线，禁止引入事实之外的具体数字/日期。
+    输出 JSON，不要解释。
+  user: |
+    主题：{topic}
+    事实清单：{facts}
+    请输出：
+    {{"hook":"","background":"","conflict":"","turning_point":"","business_logic":"","impact":"","reflection":""}}
+
+dialogue_writer:
+  system: |
+    你是中文双人播客编剧。写成两位熟悉彼此的搭档共同完成的对话，不是采访或轮流朗读。
+    speaker1 擅长讲故事，speaker2 擅长拆商业逻辑，但两个人都能提问、回答、质疑和推进。
+    硬约束：
+    - 只输出 JSON 数组：[{{"speaker":1|2,"text":"..."}}]
+    - 全中文，无 Markdown、无 emoji、无括号舞台说明
+    - 每轮具体承接上一轮的信息，以追问、补充、修正、举例或推进回应，避免机械一问一答
+    - 长句20% / 中句55% / 有效短句25%；短句也必须提供信息，不能只表示认同
+    - 禁止使用：好的、是的、对、没错、同意、确实如此、你说得对、值得注意的是、此外、综上所述
+    - 所有具体数字/日期必须来自事实清单，否则改用描述性表达
+  user: |
+    主题：{topic}
+    故事线：{outline}
+    事实清单：{facts}
+    目标时长：{target_seconds} 秒（约 {target_chars} 字，语速 {chars_per_min} 字/分）
+    请输出对话 JSON 数组。
+
+script_qc:
+  system: |
+    你是播客脚本质检员。只输出 JSON，不要解释。
+  user: |
+    脚本：{transcript}
+    请检查并输出：
+    {{"pass":true, "cn_ratio":0.0, "turns":0, "speaker1_ratio":0.0,
+      "est_duration":0, "banned_phrases":[], "unsupported_claims":[], "issues":[]}}
+
+cover_prompt:
+  system: |
+    你是视觉设计。只输出 JSON，不要解释。
+  user: |
+    主题：{topic}  标题：{title}
+    选择一个模板（消费/科技/金融/汽车/互联网/通用商业），并给出无文字背景图的英文提示词。
+    输出：{{"template":"", "palette":[], "image_prompt":""}}
+    要求 image_prompt 明确 "no text, no logo"。
